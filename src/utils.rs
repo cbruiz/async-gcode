@@ -1,5 +1,7 @@
-use crate::stream::PushBackable;
-use futures::{Stream, StreamExt};
+use crate::stream::{ByteStream, PushBackable, UnpinTrait};
+
+#[cfg(feature = "future-stream")]
+use futures::StreamExt;
 
 #[doc(hidden)]
 #[macro_export]
@@ -26,7 +28,7 @@ macro_rules! try_result {
 
 pub(crate) async fn skip_whitespaces<S, E>(input: &mut S) -> Option<Result<(), E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
 {
     loop {
         let b = match input.next().await? {
@@ -41,23 +43,32 @@ where
     Some(Ok(()))
 }
 
-#[cfg(itest)]
+#[cfg(test)]
 mod test {
-    use super::{skip_whitespaces, stream, StreamExt};
-
-    #[cfg(not(feature = "parse-checksum"))]
-    use crate::stream::pushback::PushBack;
-    #[cfg(feature = "parse-checksum")]
-    use crate::stream::xorsum_pushback::XorSumPushBack;
+    use super::{skip_whitespaces};
+    use futures::stream;
+    use futures::StreamExt;
 
     #[test]
     fn skips_white_spaces_and_pushes_back_the_first_non_space_byte() {
-        let mut data = PushBack::new(stream::iter(
+
+        #[cfg(not(feature = "parse-checksum"))]
+        use crate::stream::pushback::PushBack as PushBack;
+        #[cfg(feature = "parse-checksum")]
+        use crate::stream::xorsum_pushback::XorSumPushBack as PushBack;
+
+        let iter = stream::iter(
             b"      d"
                 .iter()
                 .copied()
                 .map(Result::<_, core::convert::Infallible>::Ok),
-        ));
+        );
+
+        #[cfg(not(feature = "parse-checksum"))]
+        let mut data = PushBack::new(iter);
+        #[cfg(feature = "parse-checksum")]
+        let mut data = PushBack::new(iter, 0);
+
         futures_executor::block_on(async move {
             skip_whitespaces(&mut data).await;
             assert_eq!(Some(Ok(b'd')), data.next().await);

@@ -1,6 +1,4 @@
-use futures::stream;
-
-use super::{Error, GCode, Parser, StreamExt};
+use super::{Error, GCode, Parser};
 
 #[cfg(feature = "optional-value")]
 use crate::types::RealValue;
@@ -17,6 +15,10 @@ mod parse_parameters;
 mod parse_trailing_comment;
 
 fn block_on<T: Iterator<Item = u8>>(it: T) -> Vec<Result<GCode, Error>> {
+
+    use futures::stream;
+    use futures::StreamExt;
+
     let mut parser = Parser::new(stream::iter(it).map(Result::<_, Error>::Ok));
 
     futures_executor::block_on(
@@ -56,6 +58,9 @@ fn spaces_are_not_allowed_before_block_delete() {
 
 #[test]
 fn error_in_underlying_stream_are_passed_through_and_parser_recovers_on_execute() {
+    use futures::stream;
+    use futures::StreamExt;
+
     #[derive(Debug, Copy, Clone, PartialEq)]
     enum TestError {
         SomeError,
@@ -91,6 +96,7 @@ fn error_in_underlying_stream_are_passed_through_and_parser_recovers_on_execute(
             Ok(GCode::Execute)
         ]
     )
+
 }
 
 #[test]

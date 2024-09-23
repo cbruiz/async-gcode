@@ -10,7 +10,7 @@ repository = "https://github.com/ithinuel/async-gcode"
 categories = ["asynchronous", "embedded", "no-std", "parsing"]
 
 [features]
-default = ["std"]
+default = ["std", "future-stream"]
 std = ["float-f64"]
 parse-comments = []
 parse-trailing-comment = []
@@ -20,14 +20,16 @@ parse-expressions = []
 optional-value = []
 string-value = []
 float-f64 = []
+# Use future::stream as input interface. If not set, async-traits will be used insted.
+future-stream = ["pin-project-lite"]
 
 [badges]
 maintenance = { status = "experimental" }
 
 [dev-dependencies]
-futures-executor = { version = "0.3.21" }
+futures-executor = { version = "0.3" }
 
 [dependencies]
 either = {version = "^1", default-features = false }
-futures = { version = "0.3.21", default-features = false }
-pin-project-lite = { version = "0.2.9" }
+futures = { version = "0.3", default-features = false }
+pin-project-lite = { version = "0.2", optional = true }

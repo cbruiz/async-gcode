@@ -19,7 +19,11 @@ fn main() {
         ));
 
         while let Some(res) = parser.next().await {
-            println!("{:?}", res);
+            match res {
+                Ok(_r) => println!("{:?}", _r),
+                Err(Error::Io(_ie)) => println!("IOError {:?}", _ie),
+                Err(Error::Parse(_pe)) => println!("ParseError {:?}", _pe),
+            }
         }
     });
 }

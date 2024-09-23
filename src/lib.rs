@@ -98,6 +98,8 @@ mod types;
 
 mod parser;
 
+pub use stream::{ByteStream, TryByteStream};
+pub use parser::AsyncParserState;
 pub use parser::Parser;
 pub use types::Literal;
 pub use types::RealValue;
@@ -137,6 +139,7 @@ pub enum Error {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum GCode {
+    StatusCommand,
     BlockDelete,
     LineNumber(u32),
     #[cfg(feature = "parse-comments")]

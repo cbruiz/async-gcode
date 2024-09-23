@@ -7,22 +7,29 @@
 //! crate shows that there's no subtantial benefit in terms of flash size from using the fixed
 //! point arithmetics.
 
-use futures::{Stream, StreamExt};
-
 #[cfg(all(not(feature = "std"), feature = "string-value"))]
 use alloc::string::String;
 
-use crate::{stream::PushBackable, types::{Literal, ParseResult}, utils::skip_whitespaces, Error, DecimalRepr};
-
+use crate::{
+    stream::PushBackable,
+    types::{Literal, ParseResult},
+    utils::skip_whitespaces,
+    Error,
+    DecimalRepr
+};
+use crate::stream::{ByteStream, UnpinTrait};
 #[cfg(not(feature = "parse-expressions"))]
 use crate::types::RealValue;
 
 #[cfg(any(feature = "parse-parameters", feature = "parse-expressions"))]
 pub use crate::types::expressions::{Expression, Operator};
 
+#[cfg(feature = "future-stream")]
+use futures::StreamExt;
+
 pub(crate) async fn parse_number<S, E>(input: &mut S) -> Option<Result<(u32, u8), E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
 {
     let mut n = 0;
@@ -53,9 +60,8 @@ where
 
 async fn parse_real_literal<S, E>(input: &mut S) -> Option<ParseResult<DecimalRepr, E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
-
 {
     // extract sign: default to positiv
     let mut b = try_result!(input.next());
@@ -110,7 +116,7 @@ where
 #[cfg(feature = "string-value")]
 async fn parse_string_literal<S, E>(input: &mut S) -> Option<ParseResult<String, E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8>,
 {
     #[cfg(not(feature = "std"))]
     use alloc::vec::Vec;
@@ -137,7 +143,7 @@ where
 
 pub(crate) async fn parse_literal<S, E>(input: &mut S) -> Option<ParseResult<Literal, E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
 {
     let b = try_result!(input.next());
@@ -155,7 +161,7 @@ where
 #[cfg(not(feature = "parse-expressions"))]
 pub(crate) async fn parse_real_value<S, E>(input: &mut S) -> Option<ParseResult<RealValue, E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
 {
     let b = try_result!(input.next());
