@@ -29,12 +29,13 @@ use crate::{
     stream::{MyTryStreamExt, PushBackable},
     types::{Comment, ParseResult},
     utils::skip_whitespaces,
-    Error, GCode,
+    Error, GCode, Literal, RealValue
 };
 
 #[cfg(feature = "future-stream")]
 use futures::StreamExt;
 
+#[cfg(feature = "parse-checksum")]
 use values::parse_number;
 
 #[cfg(not(feature = "parse-expressions"))]
@@ -77,7 +78,7 @@ where
 }
 
 #[cfg(all(feature = "parse-trailing-comment", feature = "parse-comments"))]
-async fn parse_eol_comment<S, E>(input: &mut S) -> Option<ParseResult<Comment, E>>
+async fn parse_eol_comment<S, E>(input: &mut S, line_count: &mut u32) -> Option<ParseResult<Comment, E>>
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8>,
 {
@@ -87,6 +88,7 @@ where
         match b {
             b'\r' | b'\n' => {
                 input.push_back(b);
+                *line_count += 1;
                 break Some(match String::from_utf8(v) {
                     Ok(s) => ParseResult::Ok(s),
                     Err(_) => Error::InvalidUTF8String.into(),
@@ -264,16 +266,29 @@ where
                 AsyncParserState::LineNumberOrSegment => match b.to_ascii_lowercase() {
                     b'n' => {
                         try_await_result!(skip_whitespaces(&mut self.input));
-                        let (n, ord) = try_await_result!(parse_number(&mut self.input));
-                        break if ord == 0 {
-                            let b = try_await_result!(self.input.next());
-                            Err(Error::UnexpectedByte(b).into())
-                        } else if ord > 5 {
-                            Err(Error::NumberOverflow.into())
-                        } else {
-                            self.state = AsyncParserState::Segment;
-                            Ok(GCode::LineNumber(n))
-                        };
+                        let rv = try_await!(parse_real_value(&mut self.input));
+                        match rv {
+                            RealValue::Literal(Literal::RealNumber(_rn)) => {
+                                if _rn.scale() > 0 {
+                                    break Err(Error::UnexpectedByte(b'.').into());
+                                }
+                                else {
+                                    let lnum = match _rn.integer_part().try_into() {
+                                        Ok(_i) => Some(_i),
+                                        Err(_) => None
+                                    };
+                                    break Ok(GCode::LineNumber(lnum));
+                                }
+                            }
+                            #[cfg(feature = "optional-value")]
+                            RealValue::None => {
+                                break Ok(GCode::LineNumber(None));
+                            }
+                            #[cfg(feature = "optional-value")]
+                            _ => {
+                                break Err(Error::InvalidNumberConversion.into());
+                            }
+                        }
                     }
                     _ => {
                         self.input.push_back(b);

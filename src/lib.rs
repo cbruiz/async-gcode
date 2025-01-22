@@ -141,7 +141,7 @@ pub enum Error {
 pub enum GCode {
     StatusCommand,
     BlockDelete,
-    LineNumber(u32),
+    LineNumber(Option<u32>),
     #[cfg(feature = "parse-comments")]
     Comment(String),
     Word(char, RealValue),

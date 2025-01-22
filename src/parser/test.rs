@@ -104,25 +104,25 @@ fn line_number() {
     let input = "n23\n".bytes();
     assert_eq!(
         block_on(input),
-        &[Ok(GCode::LineNumber(23)), Ok(GCode::Execute)]
+        &[Ok(GCode::LineNumber(Some(23))), Ok(GCode::Execute)]
     );
 
     let input = "N0023\n".bytes();
     assert_eq!(
         block_on(input),
-        &[Ok(GCode::LineNumber(23)), Ok(GCode::Execute)]
+        &[Ok(GCode::LineNumber(Some(23))), Ok(GCode::Execute)]
     );
 
     let input = " N 0023 \n".bytes();
     assert_eq!(
         block_on(input),
-        &[Ok(GCode::LineNumber(23)), Ok(GCode::Execute)]
+        &[Ok(GCode::LineNumber(Some(23))), Ok(GCode::Execute)]
     );
 }
 
 #[test]
-fn line_number_with_more_than_5_digits_are_not_ok() {
-    let input = "N000009\n".bytes();
+fn line_number_with_more_than_9_digits_are_not_ok() {
+    let input = "N9999999999\n".bytes();
     assert_eq!(
         block_on(input),
         &[Err(Error::NumberOverflow), Ok(GCode::Execute)]
@@ -135,7 +135,6 @@ fn line_number_can_only_be_intergers() {
     assert_eq!(
         block_on(input),
         &[
-            Ok(GCode::LineNumber(0)),
             Err(Error::UnexpectedByte(b'.')),
             Ok(GCode::Execute)
         ]
@@ -144,8 +143,7 @@ fn line_number_can_only_be_intergers() {
     assert_eq!(
         block_on(input),
         &[
-            Ok(GCode::LineNumber(9)),
-            Err(Error::UnexpectedByte(b'.')),
+            Ok(GCode::LineNumber(Some(9))),
             Ok(GCode::Execute)
         ]
     );
