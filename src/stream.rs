@@ -17,6 +17,9 @@ pub trait ByteStream  {
     /// Values yielded by the stream.
     type Item;
     async fn next(&mut self) -> Option<Self::Item>;
+
+    // Used to notify inner stream when there is a reset due timeout or something
+    async fn recovery_check(&mut self);
 }
 
 #[cfg(not(feature = "future-stream"))]
@@ -147,6 +150,10 @@ pub(crate) mod pushback {
             else {
                 self.stream.try_next().await
             }
+        }
+
+        async fn reset(&mut self) {
+            self.stream.recovery_check().await;
         }
     }
 
@@ -302,6 +309,11 @@ pub(crate) mod xorsum_pushback {
             };
             self.sum ^= item;
             Some(Ok(item))
+        }
+
+        #[cfg(not(feature = "future-stream"))]
+        async fn recovery_check(&mut self) {
+            self.stream.recovery_check().await;
         }
     }
 

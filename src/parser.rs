@@ -216,9 +216,11 @@ where
         }
     }
 
-    pub fn reset(&mut self)  {
+    pub async fn reset(&mut self)  {
         #[cfg(feature = "parse-checksum")]
         self.input.reset_sum(0);
+        #[cfg(not(feature = "future-stream"))]
+        self.input.recovery_check().await;
         self.state = AsyncParserState::Start(true);
     }
 
