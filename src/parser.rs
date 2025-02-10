@@ -41,6 +41,9 @@ use values::parse_number;
 #[cfg(not(feature = "parse-expressions"))]
 use values::parse_real_value;
 
+#[cfg(feature = "string-value")]
+use crate::parser::values::parse_text;
+
 #[cfg(feature = "parse-expressions")]
 use expressions::parse_real_value;
 use crate::stream::{ByteStream, UnpinTrait};
@@ -49,6 +52,8 @@ use crate::stream::{ByteStream, UnpinTrait};
 pub enum AsyncParserState {
     Start(bool),
     LineNumberOrSegment,
+    #[cfg(feature = "string-value")]
+    TextMode,
     Segment,
     ErrorRecovery,
     #[cfg(all(feature = "parse-trailing-comment", feature = "parse-checksum"))]
@@ -228,6 +233,11 @@ where
         self.state
     }
 
+    #[cfg(feature = "string-value")]
+    pub fn switch_to_text(&mut self) {
+        self.state = AsyncParserState::TextMode;
+    }
+
     pub fn get_current_line(&self) -> u32 {
         self.line_count
     }
@@ -296,6 +306,14 @@ where
                         self.input.push_back(b);
                         self.state = AsyncParserState::Segment;
                     }
+                },
+                #[cfg(feature="string-value")]
+                AsyncParserState::TextMode => {
+                    self.input.push_back(b);
+                    try_await_result!(skip_whitespaces(&mut self.input));
+                    let rv = try_await!(parse_text(&mut self.input));
+                    self.state = AsyncParserState::EoLOrTrailingComment;
+                    break Ok(GCode::Text(RealValue::Literal(Literal::String(rv))));
                 },
                 AsyncParserState::Segment => match b.to_ascii_lowercase() {
                     b' ' => {}

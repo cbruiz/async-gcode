@@ -158,6 +158,43 @@ where
     })
 }
 
+#[cfg(feature = "string-value")]
+pub(crate) async fn parse_text<S, E>(input: &mut S) -> Option<ParseResult<String, E>>
+where
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
+    E: core::convert::From<Error>,
+{
+    #[cfg(not(feature = "std"))]
+    use alloc::vec::Vec;
+
+    let mut array = Vec::new();
+    loop {
+        match input.next().await {
+            Some(Ok(b';')) => {
+                input.push_back(b';');
+                break;
+            }
+            Some(Ok(b'\n')) => {
+                input.push_back(b'\n');
+                break;
+            }
+            Some(Ok(b)) => {
+                array.push(b)
+            }
+            Some(Err(e)) => {
+                return Some(Err(e).into())
+            }
+            None => {
+                break;
+            }
+        }
+    }
+    match String::from_utf8(array) {
+        Ok(string) => Some(ParseResult::Ok(string)),
+        Err(_) => Some(Error::InvalidUTF8String.into()),
+    }
+}
+
 #[cfg(not(feature = "parse-expressions"))]
 pub(crate) async fn parse_real_value<S, E>(input: &mut S) -> Option<ParseResult<RealValue, E>>
 where

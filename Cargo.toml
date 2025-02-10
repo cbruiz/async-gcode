@@ -21,7 +21,7 @@ optional-value = []
 string-value = []
 float-f64 = []
 # Use future::stream as input interface. If not set, async-traits will be used insted.
-future-stream = ["pin-project-lite"]
+future-stream = ["pin-project-lite", "futures"]
 
 [badges]
 maintenance = { status = "experimental" }
@@ -31,5 +31,5 @@ futures-executor = { version = "0.3" }
 
 [dependencies]
 either = {version = "^1", default-features = false }
-futures = { version = "0.3", default-features = false }
+futures = { version = "0.3", optional = true, default-features = false }
 pin-project-lite = { version = "0.2", optional = true }

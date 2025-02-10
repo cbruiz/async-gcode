@@ -145,6 +145,8 @@ pub enum GCode {
     #[cfg(feature = "parse-comments")]
     Comment(String),
     Word(char, RealValue),
+    #[cfg(feature = "string-value")]
+    Text(RealValue),
     #[cfg(feature = "parse-parameters")]
     /// When `optional-value` is enabled, the index cannot be `RealValue::None`.
     ParameterSet(RealValue, RealValue),
