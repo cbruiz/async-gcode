@@ -56,7 +56,7 @@ pub enum AsyncParserState {
     TextMode,
     Segment,
     ErrorRecovery,
-    #[cfg(all(feature = "parse-trailing-comment", feature = "parse-checksum"))]
+    #[cfg(any(all(feature = "parse-trailing-comment", feature = "parse-checksum"), feature="string-value"))]
     EoLOrTrailingComment,
     #[cfg(any(feature = "parse-trailing-comment", feature = "parse-checksum"))]
     EndOfLine,
@@ -403,7 +403,7 @@ where
                     }
                     _ => break Err(Error::UnexpectedByte(b).into()),
                 },
-                #[cfg(all(feature = "parse-trailing-comment", feature = "parse-checksum"))]
+                #[cfg(any(all(feature = "parse-trailing-comment", feature = "parse-checksum"), feature="string-value"))]
                 AsyncParserState::EoLOrTrailingComment => {
                     #[cfg(not(feature = "parse-comments"))]
                     {

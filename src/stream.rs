@@ -152,8 +152,8 @@ pub(crate) mod pushback {
             }
         }
 
-        async fn reset(&mut self) {
-            self.stream.recovery_check().await;
+        async fn recovery_check(&mut self) {
+            self.stream.recovery_check().await
         }
     }
 
