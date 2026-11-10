@@ -220,6 +220,12 @@ where
         self.state
     }
 
+    /// Consumes the parser and returns its input stream, e.g. to close it when the stream holds a
+    /// resource (a file). A byte the parser had pushed back, if any, is dropped.
+    pub fn into_inner(self) -> S {
+        self.input.into_inner()
+    }
+
     #[cfg(feature = "string-value")]
     pub fn switch_to_text(&mut self) {
         self.state = AsyncParserState::TextMode;

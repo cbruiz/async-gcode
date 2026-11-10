@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 ### Added
-- –
+- `Parser::into_inner`, which returns the input stream (e.g. to close a file once it is parsed).
 
 ### Changed
 - Minor fix to the documentation.

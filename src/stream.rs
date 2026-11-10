@@ -109,6 +109,11 @@ pub(crate) mod pushback {
         pub fn new(stream: S) -> Self {
             Self { stream, val: None }
         }
+
+        /// The wrapped stream. A pushed-back item, if any, is dropped.
+        pub fn into_inner(self) -> S {
+            self.stream
+        }
     }
     impl<S> PushBackable for PushBack<S>
     where
@@ -226,6 +231,11 @@ pub(crate) mod xorsum_pushback {
                 head: None,
                 sum: initial_sum,
             }
+        }
+
+        /// The wrapped stream. A pushed-back item, if any, is dropped.
+        pub fn into_inner(self) -> S {
+            self.stream
         }
 
         pub fn reset_sum(&mut self, initial_sum: S::Ok) {

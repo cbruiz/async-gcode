@@ -446,3 +446,17 @@ fn value_may_be_strings() {
         &[Ok(GCode::Word('g', "Hello\"World\"".to_string().into()))]
     )
 }
+
+#[test]
+fn into_inner_returns_the_rest_of_the_input() {
+    use crate::test_utils::collect;
+    let mut parser = Parser::new(stream_of("G1\nG2\n".bytes().map(Result::<_, Error>::Ok)));
+    let first = futures_executor::block_on(parser.next());
+    assert_eq!(first, Some(Ok(GCode::Word('g', num(1, 0)))));
+    // The end of the first line was pushed back by the parser: only that byte is dropped
+    let mut stream = parser.into_inner();
+    assert_eq!(
+        collect(&mut stream),
+        "G2\n".bytes().map(Result::<_, Error>::Ok).collect::<Vec<_>>()
+    );
+}
