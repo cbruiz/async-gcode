@@ -1,4 +1,4 @@
-use super::{block_on, GCode};
+use super::{block_on, lit, GCode};
 use crate::types::{
     expressions::{Expression, Operator},
     Literal,
@@ -19,7 +19,7 @@ fn parse_unary_as_first_expressions() {
 G Cos [ 90 ] G Sin [ 90 ] G Tan [ 90 ]
 G ACos [ .5 ] g ASin[ - . 5 ] g aTan [ 2.3 ] / [ 28 ]
 g abs [ -.3 ] g exp [ 32 ] g fix [ 5.8 ] g fup [ 4.3 ]
-g ln [ 2.718281828 ] g round [ 4.8 ] g sqrt [ 4 ]"
+g ln [ 2.71828 ] g round [ 4.8 ] g sqrt [ 4 ]"
         .bytes();
     assert_eq!(
         block_on(input),
@@ -40,16 +40,16 @@ g ln [ 2.718281828 ] g round [ 4.8 ] g sqrt [ 4 ]"
             Ok(GCode::Execute),
             Ok(GCode::Word(
                 'g',
-                Expression(vec![Literal::from(0.5).into(), Operator::ACos.into()]).into()
+                Expression(vec![lit(5, 1).into(), Operator::ACos.into()]).into()
             )),
             Ok(GCode::Word(
                 'g',
-                Expression(vec![Literal::from(-0.5).into(), Operator::ASin.into()]).into()
+                Expression(vec![lit(-5, 1).into(), Operator::ASin.into()]).into()
             )),
             Ok(GCode::Word(
                 'g',
                 Expression(vec![
-                    Literal::from(2.3).into(),
+                    lit(23, 1).into(),
                     Literal::from(28).into(),
                     Operator::ATan.into()
                 ])
@@ -58,7 +58,7 @@ g ln [ 2.718281828 ] g round [ 4.8 ] g sqrt [ 4 ]"
             Ok(GCode::Execute),
             Ok(GCode::Word(
                 'g',
-                Expression(vec![Literal::from(-0.3).into(), Operator::Abs.into()]).into()
+                Expression(vec![lit(-3, 1).into(), Operator::Abs.into()]).into()
             )),
             Ok(GCode::Word(
                 'g',
@@ -66,20 +66,20 @@ g ln [ 2.718281828 ] g round [ 4.8 ] g sqrt [ 4 ]"
             )),
             Ok(GCode::Word(
                 'g',
-                Expression(vec![Literal::from(5.8).into(), Operator::Fix.into()]).into()
+                Expression(vec![lit(58, 1).into(), Operator::Fix.into()]).into()
             )),
             Ok(GCode::Word(
                 'g',
-                Expression(vec![Literal::from(4.3).into(), Operator::Fup.into()]).into()
+                Expression(vec![lit(43, 1).into(), Operator::Fup.into()]).into()
             )),
             Ok(GCode::Execute),
             Ok(GCode::Word(
                 'g',
-                Expression(vec![Literal::from(2.718281828).into(), Operator::Ln.into()]).into()
+                Expression(vec![lit(271828, 5).into(), Operator::Ln.into()]).into()
             )),
             Ok(GCode::Word(
                 'g',
-                Expression(vec![Literal::from(4.8).into(), Operator::Round.into()]).into()
+                Expression(vec![lit(48, 1).into(), Operator::Round.into()]).into()
             )),
             Ok(GCode::Word(
                 'g',
@@ -204,7 +204,7 @@ fn parse_expressions_with_parameter_get() {
                     Literal::from(32).into(),
                     Literal::from(-25).into(),
                     Operator::Add.into(),
-                    Literal::from(-8.32).into(),
+                    lit(-832, 2).into(),
                     Operator::GetParameter.into(),
                     Operator::Add.into(),
                     Operator::GetParameter.into(),

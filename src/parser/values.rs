@@ -12,76 +12,108 @@ use alloc::string::String;
 
 use crate::{
     stream::PushBackable,
-    types::{Literal, ParseResult},
-    utils::skip_whitespaces,
+    types::ParseResult,
+    utils::next_non_space,
     Error,
     DecimalRepr
 };
+#[cfg(all(feature = "parse-parameters", not(feature = "parse-expressions")))]
+use crate::utils::skip_whitespaces;
+#[cfg(any(feature = "parse-parameters", feature = "parse-expressions"))]
+use crate::types::Literal;
 use crate::stream::{ByteStream, UnpinTrait};
 #[cfg(not(feature = "parse-expressions"))]
 use crate::types::RealValue;
 
-#[cfg(any(feature = "parse-parameters", feature = "parse-expressions"))]
-pub use crate::types::expressions::{Expression, Operator};
+#[cfg(all(feature = "parse-parameters", not(feature = "parse-expressions")))]
+use crate::types::expressions::{Expression, Operator};
 
 #[cfg(feature = "future-stream")]
 use futures::StreamExt;
 
+/// Powers of ten for the decimal scales a number can have (at most 9 digits per part).
+const POW10: [u32; 10] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+];
+
+/// Reads the digits of a number whose first byte, `b`, has already been consumed.
+///
+/// Returns the value, the number of digits and the first byte that is not a digit. That byte is
+/// consumed: the caller decides whether to push it back.
+async fn parse_digits<S, E>(input: &mut S, mut b: u8) -> Option<Result<(u32, u8, u8), E>>
+where
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
+    E: core::convert::From<Error>,
+{
+    let mut n = 0u32;
+    let mut order = 0u8;
+    while b.is_ascii_digit() {
+        // At most 9 digits, so `n` stays below 10^9 and cannot overflow.
+        if order > 8 {
+            return Some(Err(crate::Error::NumberOverflow.into()));
+        }
+        n = n * 10 + u32::from(b - b'0');
+        order += 1;
+        b = match input.next().await? {
+            Ok(b) => b,
+            Err(e) => return Some(Err(e)),
+        };
+    }
+    Some(Ok((n, order, b)))
+}
+
+#[cfg(feature = "parse-checksum")]
 pub(crate) async fn parse_number<S, E>(input: &mut S) -> Option<Result<(u32, u8), E>>
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
 {
-    let mut n = 0;
-    let mut order = 0;
-    let res = loop {
-        let b = match input.next().await? {
-            Ok(b) => b,
-            Err(e) => {
-                return Some(Err(e))},
-        };
-        match b {
-            b'0'..=b'9' => {
-                let digit = u32::from(b - b'0');
-                if order > 8 {
-                    return Some(Err(crate::Error::NumberOverflow.into()));
-                }
-                n = n * 10 + digit;
-                order +=1;
-            }
-            _ => {
-                input.push_back(b);
-                break Ok((n, order));
-            }
-        }
+    let b = match input.next().await? {
+        Ok(b) => b,
+        Err(e) => return Some(Err(e)),
     };
-    Some(res)
+    let (n, order, b) = match parse_digits(input, b).await? {
+        Ok(r) => r,
+        Err(e) => return Some(Err(e)),
+    };
+    input.push_back(b);
+    Some(Ok((n, order)))
 }
 
-async fn parse_real_literal<S, E>(input: &mut S) -> Option<ParseResult<DecimalRepr, E>>
+/// Parses a real number whose first byte (a sign, a decimal point or a digit) has already been
+/// consumed. The byte that ends the number is pushed back.
+async fn parse_real_literal<S, E>(input: &mut S, first: u8) -> Option<ParseResult<DecimalRepr, E>>
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
 {
     // extract sign: default to positiv
-    let mut b = try_result!(input.next());
-    let mut negativ = false;
-
-    if b == b'-' || b == b'+' {
-        negativ = b == b'-';
+    let mut b = first;
+    let negativ = b == b'-';
+    if negativ || b == b'+' {
         // skip spaces after the sign
-        try_result!(skip_whitespaces(input));
-        b = try_result!(input.next());
+        b = try_result!(next_non_space(input));
     }
 
     // parse integer part
     let int = if b != b'.' {
-        input.push_back(b);
         // if not a decimal point, there must be an integer
-        let (v, _) = try_result!(parse_number(input));
+        let (v, _, next) = try_result!(parse_digits(input, b));
         // skip spaces after integer part
-        try_result!(skip_whitespaces(input));
-        b = try_result!(input.next());
+        b = if next == b' ' {
+            try_result!(next_non_space(input))
+        } else {
+            next
+        };
         Some(v)
     } else {
         None
@@ -90,25 +122,29 @@ where
     // parse decimal part: mandatory if integer part is abscent
     let dec = if b == b'.' {
         // skip spaces after decimal point
-        try_result!(skip_whitespaces(input));
-        Some(try_result!(parse_number(input)))
+        let first = try_result!(next_non_space(input));
+        let (n, ord, next) = try_result!(parse_digits(input, first));
+        b = next;
+        Some((n, ord))
     } else {
-        input.push_back(b);
         None
     };
+    input.push_back(b);
 
     let res = if int.is_none() && dec.is_none() {
         ParseResult::Parsing(Error::BadNumberFormat.into())
     } else {
-        let sign = if negativ { -1i32 } else { 1i32 };
         let int = int.unwrap_or(0);
-        let (n, ord) = dec.unwrap_or((0u32,0u8));
-        let scaler = u32::pow(10, ord as u32);
-        ParseResult::Ok(
-            DecimalRepr::new(
-                sign * (((int  * scaler) + n) as i32), ord
-            )
-        )
+        let (n, ord) = dec.unwrap_or((0u32, 0u8));
+        // The scaled value must fit in the i32 mantissa of `DecimalRepr`.
+        let magnitude = int
+            .checked_mul(POW10[usize::from(ord)])
+            .and_then(|v| v.checked_add(n))
+            .and_then(|v| i32::try_from(v).ok());
+        match magnitude {
+            Some(m) => ParseResult::Ok(DecimalRepr::new(if negativ { -m } else { m }, ord)),
+            None => ParseResult::Parsing(Error::NumberOverflow),
+        }
     };
     Some(res)
 }
@@ -116,7 +152,7 @@ where
 #[cfg(feature = "string-value")]
 async fn parse_string_literal<S, E>(input: &mut S) -> Option<ParseResult<String, E>>
 where
-    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
 {
     #[cfg(not(feature = "std"))]
     use alloc::vec::Vec;
@@ -141,6 +177,7 @@ where
     }
 }
 
+#[cfg(any(feature = "parse-parameters", feature = "parse-expressions"))]
 pub(crate) async fn parse_literal<S, E>(input: &mut S) -> Option<ParseResult<Literal, E>>
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
@@ -149,8 +186,7 @@ where
     let b = try_result!(input.next());
     Some(match b {
         b'+' | b'-' | b'.' | b'0'..=b'9' => {
-            input.push_back(b);
-            ParseResult::Ok(Literal::from(try_parse!(parse_real_literal(input))))
+            ParseResult::Ok(Literal::from(try_parse!(parse_real_literal(input, b))))
         }
         #[cfg(feature = "string-value")]
         b'"' => ParseResult::Ok(Literal::from(try_parse!(parse_string_literal(input)))),
@@ -158,6 +194,8 @@ where
     })
 }
 
+/// Reads the text of the line: until the end of the line, which is pushed back, or the end of the
+/// input. With `parse-trailing-comment`, a `;` also ends the text and is pushed back.
 #[cfg(feature = "string-value")]
 pub(crate) async fn parse_text<S, E>(input: &mut S) -> Option<ParseResult<String, E>>
 where
@@ -170,12 +208,13 @@ where
     let mut array = Vec::new();
     loop {
         match input.next().await {
+            #[cfg(feature = "parse-trailing-comment")]
             Some(Ok(b';')) => {
                 input.push_back(b';');
                 break;
             }
-            Some(Ok(b'\n')) => {
-                input.push_back(b'\n');
+            Some(Ok(b @ (b'\r' | b'\n'))) => {
+                input.push_back(b);
                 break;
             }
             Some(Ok(b)) => {
@@ -195,25 +234,22 @@ where
     }
 }
 
+/// Skips spaces and parses a real value (the value of a word, a line number or a parameter).
 #[cfg(not(feature = "parse-expressions"))]
-pub(crate) async fn parse_real_value<S, E>(input: &mut S) -> Option<ParseResult<RealValue, E>>
+pub(crate) async fn parse_word_value<S, E>(input: &mut S) -> Option<ParseResult<RealValue, E>>
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
 {
-    let b = try_result!(input.next());
+    let b = try_result!(next_non_space(input));
     // println!("real value: {:?}", b as char);
 
     let res = match b {
         b'+' | b'-' | b'.' | b'0'..=b'9' => {
-            input.push_back(b);
-            ParseResult::Ok(RealValue::from(try_parse!(parse_literal(input))))
+            ParseResult::Ok(RealValue::from(try_parse!(parse_real_literal(input, b))))
         }
         #[cfg(feature = "string-value")]
-        b'"' => {
-            input.push_back(b);
-            ParseResult::Ok(RealValue::from(try_parse!(parse_literal(input))))
-        }
+        b'"' => ParseResult::Ok(RealValue::from(try_parse!(parse_string_literal(input)))),
         #[cfg(feature = "parse-parameters")]
         b'#' => {
             #[cfg(not(feature = "std"))]
@@ -232,7 +268,7 @@ where
             };
 
             let vec: Vec<_> = core::iter::once(literal.into())
-                .chain(core::iter::repeat(Operator::GetParameter.into()).take(n))
+                .chain(core::iter::repeat_n(Operator::GetParameter.into(), n))
                 .collect();
             ParseResult::Ok(Expression(vec).into())
         }

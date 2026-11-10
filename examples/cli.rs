@@ -15,7 +15,7 @@ impl From<async_gcode::Error> for Error {
 fn main() {
     block_on(async {
         let mut parser = async_gcode::Parser::new(stream::iter(
-            std::io::stdin().bytes().map(|res| res.map_err(Error::Io)),
+            std::io::stdin().lock().bytes().map(|res| res.map_err(Error::Io)),
         ));
 
         while let Some(res) = parser.next().await {

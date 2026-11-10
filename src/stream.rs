@@ -160,45 +160,28 @@ pub(crate) mod pushback {
     #[cfg(test)]
     mod test {
         use super::{PushBack, PushBackable};
-        use futures::stream::{self, StreamExt};
+        use crate::test_utils::{collect, stream_of, take};
+
+        fn data() -> Vec<Result<u8, core::convert::Infallible>> {
+            [1, 2, 4, 8, 16, 32, 64, 128].iter().copied().map(Ok).collect()
+        }
 
         #[test]
         fn the_stream_works() {
-            let data = [1, 2, 4, 8, 16, 32, 64, 128]
-                .iter()
-                .copied()
-                .map(Result::<_, core::convert::Infallible>::Ok)
-                .collect::<Vec<_>>();
-            let mut strm = PushBack::new(stream::iter(data.iter().copied()));
-            assert_eq!(
-                futures_executor::block_on((&mut strm).collect::<Vec<_>>()),
-                data
-            );
+            let data = data();
+            let mut strm = PushBack::new(stream_of(data.iter().copied()));
+            assert_eq!(collect(&mut strm), data);
         }
 
         #[test]
         fn pushbacked_value_come_out_first() {
-            let data = [1, 2, 4, 8, 16, 32, 64, 128]
-                .iter()
-                .copied()
-                .map(Result::<_, core::convert::Infallible>::Ok)
-                .collect::<Vec<_>>();
-            let mut strm = PushBack::new(stream::iter(data.iter().copied()));
-            assert_eq!(
-                futures_executor::block_on((&mut strm).take(4).collect::<Vec<_>>()),
-                &data[..=3]
-            );
+            let data = data();
+            let mut strm = PushBack::new(stream_of(data.iter().copied()));
+            assert_eq!(take(&mut strm, 4), &data[..=3]);
 
             strm.push_back(0xCC);
 
-            assert_eq!(
-                futures_executor::block_on((&mut strm).take(4).collect::<Vec<_>>()),
-                [0xCC, 16, 32, 64]
-                    .iter()
-                    .copied()
-                    .map(Result::<_, core::convert::Infallible>::Ok)
-                    .collect::<Vec<_>>()
-            );
+            assert_eq!(take(&mut strm, 4), [Ok(0xCC), Ok(16), Ok(32), Ok(64)]);
         }
     }
 }
@@ -320,71 +303,44 @@ pub(crate) mod xorsum_pushback {
     #[cfg(test)]
     mod test {
         use super::{PushBackable, XorSumPushBack};
-        use futures::stream::{self, StreamExt};
+        use crate::test_utils::{collect, stream_of, take};
+
+        fn data() -> Vec<Result<u8, core::convert::Infallible>> {
+            [1, 2, 4, 8, 16, 32, 64, 128].iter().copied().map(Ok).collect()
+        }
 
         #[test]
         fn the_stream_works_and_the_xorsum_is_computed() {
-            let data = [1, 2, 4, 8, 16, 32, 64, 128]
-                .iter()
-                .copied()
-                .map(Result::<_, core::convert::Infallible>::Ok)
-                .collect::<Vec<_>>();
-            let mut strm = XorSumPushBack::new(stream::iter(data.iter().copied()), 0);
-            assert_eq!(
-                futures_executor::block_on((&mut strm).collect::<Vec<_>>()),
-                data
-            );
+            let data = data();
+            let mut strm = XorSumPushBack::new(stream_of(data.iter().copied()), 0);
+            assert_eq!(collect(&mut strm), data);
             assert_eq!(strm.sum(), 0xFF);
         }
 
         #[test]
         fn the_xorsum_can_be_reset() {
-            let data = [1, 2, 4, 8, 16, 32, 64, 128]
-                .iter()
-                .copied()
-                .map(Result::<_, core::convert::Infallible>::Ok)
-                .collect::<Vec<_>>();
-            let mut strm = XorSumPushBack::new(stream::iter(data.iter().copied()), 0);
-            assert_eq!(
-                futures_executor::block_on((&mut strm).take(4).collect::<Vec<_>>()),
-                &data[..=3]
-            );
+            let data = data();
+            let mut strm = XorSumPushBack::new(stream_of(data.iter().copied()), 0);
+            assert_eq!(take(&mut strm, 4), &data[..=3]);
             assert_eq!(strm.sum(), 0x0F);
 
             strm.reset_sum(0x30);
 
-            assert_eq!(
-                futures_executor::block_on((&mut strm).collect::<Vec<_>>()),
-                &data[4..]
-            );
+            assert_eq!(collect(&mut strm), &data[4..]);
             assert_eq!(strm.sum(), 0xC0);
         }
 
         #[test]
         fn pushing_back_updates_the_xorsum() {
-            let data = [1, 2, 4, 8, 16, 32, 64, 128]
-                .iter()
-                .copied()
-                .map(Result::<_, core::convert::Infallible>::Ok)
-                .collect::<Vec<_>>();
-            let mut strm = XorSumPushBack::new(stream::iter(data.iter().copied()), 0);
-            assert_eq!(
-                futures_executor::block_on((&mut strm).take(4).collect::<Vec<_>>()),
-                &data[..=3]
-            );
+            let data = data();
+            let mut strm = XorSumPushBack::new(stream_of(data.iter().copied()), 0);
+            assert_eq!(take(&mut strm, 4), &data[..=3]);
             assert_eq!(strm.sum(), 0x0F);
 
             strm.push_back(0xCC);
 
             assert_eq!(strm.sum(), 0xC3);
-            assert_eq!(
-                futures_executor::block_on((&mut strm).take(4).collect::<Vec<_>>()),
-                [0xCC, 16, 32, 64]
-                    .iter()
-                    .copied()
-                    .map(Result::<_, core::convert::Infallible>::Ok)
-                    .collect::<Vec<_>>()
-            );
+            assert_eq!(take(&mut strm, 4), [Ok(0xCC), Ok(16), Ok(32), Ok(64)]);
         }
     }
 }

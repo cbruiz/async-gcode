@@ -10,7 +10,10 @@
 //!
 //! ## 🔩 Example
 //!
+//! With the `future-stream` feature, the input is a `futures::stream::Stream`:
+//!
 //! ```
+//! # #[cfg(feature = "future-stream")] {
 //! use futures::stream;
 //! use futures_executor::block_on;
 //! use async_gcode::{Parser, Error};
@@ -34,13 +37,22 @@
 //!         }
 //!     }
 //! });
+//! # }
 //! ```
+//!
+//! Without it, the input implements this crate's [`ByteStream`] trait.
 //!
 //! ## Error management
 //!
 //! On parsing error the `Parser` can no longer trust its input and enters an error recovery state.
-//! No `GCode` or `Error` will be emitted until a new line character (`\n`) is received. Then a
+//! No `GCode` or `Error` will be emitted until the end of the line is received. Then a
 //! `GCode::Execute` is emitted and the parser restarts in a reliable known state.
+//!
+//! ## End of line
+//!
+//! A line ends with `\n`, `\r` or `\r\n`. Each of them emits a single `GCode::Execute` and counts
+//! as a single line. `GCode::Execute` is emitted as soon as the `\r` is received, without waiting
+//! for the next byte.
 //!
 //! ## ⚙ Features
 //! - `std` : Enabled by default. Allows for the use of dynamic allocation.
@@ -54,7 +66,12 @@
 //! - `optional-value` : Allows to omit in `RealValue` in word and parameter value positions.
 //!   Parameter indices cannot be omitted nor can be literals in expressions.
 //! - `string-value` : Allows `RealValue` to be a string. Any character preceded with `\` will be
-//!   used as is (useful for `"`, `)` or new line).
+//!   used as is (useful for `"`, `)` or new line). Also enables the text mode
+//!   (`Parser::switch_to_text`), which reads the rest of the line as a `GCode::Text`. The text
+//!   ends at the end of the line, or at a `;` when `parse-trailing-comment` is enabled.
+//! - `future-stream` : Enabled by default. The input is a `futures::stream::Stream`. Without it,
+//!   the input implements this crate's `ByteStream` trait.
+//! - `float-f64` : Enabled by `std`. Conversions between `f64` and the parsed values.
 //!
 //! ## ⚠ Warning
 //!
@@ -74,7 +91,8 @@
 //! variable used internally.
 //!
 //! [RS274/NGC interpreter version 3]: https://www.nist.gov/publications/nist-rs274ngc-interpreter-version-3?pub_id=823374
-#![cfg_attr(not(feature = "std"), no_std)]
+// The tests use the standard library whatever the features.
+#![cfg_attr(not(any(feature = "std", test)), no_std)]
 
 #[cfg(all(
     not(feature = "std"),
@@ -95,6 +113,9 @@ mod utils;
 
 mod stream;
 mod types;
+
+#[cfg(test)]
+mod test_utils;
 
 mod parser;
 

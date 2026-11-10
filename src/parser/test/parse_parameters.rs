@@ -1,15 +1,12 @@
 use crate::{
-    types::{
-        expressions::{Expression, Operator},
-        Literal,
-    },
+    types::expressions::{Expression, Operator},
     GCode,
 };
 
 #[cfg(feature = "optional-value")]
 use crate::{types::RealValue, Error};
 
-use super::block_on;
+use super::{block_on, lit, num};
 
 #[test]
 fn parse_param_get() {
@@ -20,7 +17,7 @@ fn parse_param_get() {
             Ok(GCode::Word(
                 'g',
                 Expression(vec![
-                    Literal::from(-21.098).into(),
+                    lit(-21098, 3).into(),
                     Operator::GetParameter.into()
                 ])
                 .into()
@@ -39,7 +36,7 @@ fn parse_nested_parameter_get() {
             Ok(GCode::Word(
                 'g',
                 Expression(vec![
-                    Literal::from(-21.098).into(),
+                    lit(-21098, 3).into(),
                     Operator::GetParameter.into(),
                     Operator::GetParameter.into()
                 ])
@@ -55,7 +52,7 @@ fn parse_param_set() {
     let input = "# 23.4 = -75.8 ".bytes();
     assert_eq!(
         block_on(input),
-        &[Ok(GCode::ParameterSet((23.4).into(), (-75.8).into())),]
+        &[Ok(GCode::ParameterSet(num(234, 1), num(-758, 1))),]
     );
 }
 #[test]
@@ -65,12 +62,12 @@ fn parse_param_set_with_nested_param_get() {
         block_on(input),
         &[Ok(GCode::ParameterSet(
             Expression(vec![
-                Literal::from(23.4).into(),
+                lit(234, 1).into(),
                 Operator::GetParameter.into()
             ])
             .into(),
             Expression(vec![
-                Literal::from(-75.8).into(),
+                lit(-758, 1).into(),
                 Operator::GetParameter.into(),
                 Operator::GetParameter.into()
             ])
@@ -97,13 +94,13 @@ fn parameter_set_may_have_no_value() {
         block_on(input),
         &[
             Ok(GCode::ParameterSet(
-                Literal::from(12.).into(),
+                lit(12, 0).into(),
                 RealValue::None
             )),
             Ok(GCode::Word('g', RealValue::None)),
             Ok(GCode::Execute),
             Ok(GCode::ParameterSet(
-                Literal::from(34.).into(),
+                lit(34, 0).into(),
                 RealValue::None
             )),
             Ok(GCode::Execute),
@@ -119,13 +116,13 @@ fn parse_param_with_string_index() {
         block_on(input),
         &[
             Ok(GCode::ParameterSet(
-                Literal::from("hello".to_owned()).into(),
-                Literal::from("world".to_owned()).into()
+                crate::Literal::from("hello".to_owned()).into(),
+                crate::Literal::from("world".to_owned()).into()
             )),
             Ok(GCode::Word(
                 'g',
                 Expression(vec![
-                    Literal::from("hello".to_owned()).into(),
+                    crate::Literal::from("hello".to_owned()).into(),
                     Operator::GetParameter.into()
                 ])
                 .into()

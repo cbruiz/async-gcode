@@ -1,5 +1,7 @@
 use either::Either;
-use futures::stream::{Stream, StreamExt};
+
+#[cfg(feature = "future-stream")]
+use futures::StreamExt;
 
 #[cfg(all(
     not(feature = "std"),
@@ -10,7 +12,7 @@ use alloc::vec::Vec;
 use std::vec::Vec;
 
 use crate::{
-    stream::PushBackable,
+    stream::{ByteStream, PushBackable, UnpinTrait},
     types::{
         expressions::{Associativity, ExprItem, Expression, OpType, Operator},
         Literal, ParseResult, RealValue,
@@ -50,13 +52,12 @@ macro_rules! match_operator {
         Token::Operator($p)
     }};
     (@ $input:expr, $c:literal => $op:path) => {{
-        let mut zipped = $input.zip(futures::stream::iter($c.iter()));
-        for _ in 0..$c.len() {
-            match zipped.next().await? {
-                (Ok(input_byte), &expected_byte) => if input_byte.to_ascii_lowercase() != expected_byte {
+        for &expected_byte in $c.iter() {
+            match $input.next().await? {
+                Ok(input_byte) => if input_byte.to_ascii_lowercase() != expected_byte {
                     return Some(ParseResult::Parsing(Error::UnexpectedByte(input_byte)))
                 }
-                (Err(e), _) => return Some(ParseResult::Input(e))
+                Err(e) => return Some(ParseResult::Input(e))
             }
         }
 
@@ -93,7 +94,8 @@ macro_rules! match_operator {
 
 async fn tokenize<S, E>(input: &mut S, expect: Expect) -> Option<ParseResult<Token, E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + UnpinTrait + PushBackable<Item = u8>,
+    E: From<Error>,
 {
     let b = match input.next().await? {
         Ok(b) => b,
@@ -166,9 +168,20 @@ where
     Some(ParseResult::Ok(token))
 }
 
+/// Skips spaces and parses a real value (the value of a word, a line number or a parameter).
+pub(crate) async fn parse_word_value<S, E>(input: &mut S) -> Option<ParseResult<RealValue, E>>
+where
+    S: ByteStream<Item = Result<u8, E>> + UnpinTrait + PushBackable<Item = u8>,
+    E: From<Error>,
+{
+    try_result!(skip_whitespaces(input));
+    parse_real_value(input).await
+}
+
 pub(crate) async fn parse_real_value<S, E>(input: &mut S) -> Option<ParseResult<RealValue, E>>
 where
-    S: Stream<Item = Result<u8, E>> + Unpin + PushBackable<Item = u8>,
+    S: ByteStream<Item = Result<u8, E>> + UnpinTrait + PushBackable<Item = u8>,
+    E: From<Error>,
 {
     /*
     Begin

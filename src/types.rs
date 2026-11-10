@@ -32,7 +32,7 @@ pub type Comment = ();
 #[cfg(feature = "parse-comments")]
 pub type Comment = String;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct DecimalRepr {
     integer: i32,
     scale: u8,
@@ -53,15 +53,6 @@ impl PartialEq for DecimalRepr {
     }
 }
 
-impl Default for DecimalRepr {
-    fn default() -> Self {
-        Self {
-            integer: 0i32,
-            scale: 0u8,
-        }
-    }
-}
-
 impl DecimalRepr {
     pub const fn new(integer: i32, scale: u8) -> DecimalRepr {
         DecimalRepr {
@@ -72,7 +63,9 @@ impl DecimalRepr {
     #[cfg(feature = "float-f64")]
     /// Convert from f64 with a maximum of 8 decimal positions
     pub fn from_f64(number: f64) -> DecimalRepr {
-        let integer =  (number * 100000000.0f64).trunc() as i32;
+        // The cast truncates towards zero (and saturates), with no need for `f64::trunc`, which
+        // `core` does not provide.
+        let integer = (number * 100000000.0f64) as i32;
         DecimalRepr {
             integer,
             scale: 8,
@@ -156,9 +149,7 @@ impl TryFrom<f64> for Literal {
     fn try_from(value: f64) -> Result<Self, Self::Error> {
         // As parser constraints: 5 decimals max
         let scaled_value = value * 100000.0;
-        if scaled_value > f64::from(i32::MAX) {
-            Err(crate::Error::InvalidNumberConversion)
-        } else if scaled_value < f64::from(i32::MIN) {
+        if scaled_value > f64::from(i32::MAX) || scaled_value < f64::from(i32::MIN) {
             Err(crate::Error::InvalidNumberConversion)
         } else {
             Ok(Self::RealNumber(

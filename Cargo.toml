@@ -15,8 +15,8 @@ std = ["float-f64"]
 parse-comments = []
 parse-trailing-comment = []
 parse-checksum = []
-parse-parameters = []
-parse-expressions = []
+parse-parameters = ["dep:either"]
+parse-expressions = ["dep:either"]
 optional-value = []
 string-value = []
 float-f64 = []
@@ -29,7 +29,11 @@ maintenance = { status = "experimental" }
 [dev-dependencies]
 futures-executor = { version = "0.3" }
 
+[[example]]
+name = "cli"
+required-features = ["std", "future-stream"]
+
 [dependencies]
-either = {version = "^1", default-features = false }
+either = { version = "^1", default-features = false, optional = true }
 futures = { version = "0.3", optional = true, default-features = false }
 pin-project-lite = { version = "0.2", optional = true }
