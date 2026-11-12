@@ -206,6 +206,9 @@ where
     use alloc::vec::Vec;
 
     let mut array = Vec::new();
+    // Bytes beyond the limit are consumed (so that the line still ends where expected) but not
+    // stored, to keep an arbitrarily long line from exhausting a small heap.
+    let mut too_long = false;
     loop {
         match input.next().await {
             #[cfg(feature = "parse-trailing-comment")]
@@ -218,7 +221,11 @@ where
                 break;
             }
             Some(Ok(b)) => {
-                array.push(b)
+                if array.len() < crate::MAX_TEXT_LENGTH {
+                    array.push(b)
+                } else {
+                    too_long = true;
+                }
             }
             Some(Err(e)) => {
                 return Some(Err(e).into())
@@ -227,6 +234,9 @@ where
                 break;
             }
         }
+    }
+    if too_long {
+        return Some(Error::TextTooLong.into());
     }
     match String::from_utf8(array) {
         Ok(string) => Some(ParseResult::Ok(string)),

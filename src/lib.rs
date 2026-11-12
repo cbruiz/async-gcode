@@ -149,6 +149,10 @@ pub enum Error {
     /// The string or comment received contained an invalid UTF-8 character sequence.
     InvalidUTF8String,
 
+    #[cfg(feature = "string-value")]
+    /// The string received is longer than [MAX_TEXT_LENGTH] bytes.
+    TextTooLong,
+
     #[cfg(feature = "parse-checksum")]
     /// Checksum verification failed. The error contains the computed value.
     BadChecksum(u8),
@@ -157,6 +161,10 @@ pub enum Error {
     /// The expressions received was invalid.
     InvalidExpression,
 }
+
+/// Max length (in bytes) of a string value. Longer ones are rejected with [Error::TextTooLong].
+#[cfg(feature = "string-value")]
+pub const MAX_TEXT_LENGTH: usize = 128;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum GCode {
