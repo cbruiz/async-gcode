@@ -130,3 +130,33 @@ fn parse_param_with_string_index() {
         ]
     );
 }
+
+#[test]
+fn parameter_chains_are_bounded() {
+    use crate::{Error, MAX_EXPRESSION_ITEMS};
+    // The literal and its `GetParameter` operators.
+    let longest = format!("G{}1\n", "#".repeat(MAX_EXPRESSION_ITEMS - 1));
+    let mut expected = vec![lit(1, 0).into()];
+    expected.extend(std::iter::repeat_n(
+        Operator::GetParameter.into(),
+        MAX_EXPRESSION_ITEMS - 1,
+    ));
+    assert_eq!(
+        block_on(longest.bytes()),
+        &[
+            Ok(GCode::Word('g', Expression(expected).into())),
+            Ok(GCode::Execute)
+        ]
+    );
+
+    let too_long = format!("G{}1 G2\nG3\n", "#".repeat(MAX_EXPRESSION_ITEMS));
+    assert_eq!(
+        block_on(too_long.bytes()),
+        &[
+            Err(Error::InvalidExpression),
+            Ok(GCode::Execute),
+            Ok(GCode::Word('g', num(3, 0))),
+            Ok(GCode::Execute),
+        ]
+    );
+}

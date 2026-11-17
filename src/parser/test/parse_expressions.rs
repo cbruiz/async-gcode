@@ -252,3 +252,34 @@ fn parse_expressions_with_parameter_get() {
         ]
     );
 }
+
+#[test]
+fn expressions_are_bounded() {
+    use crate::{parser::test::num, Error, MAX_EXPRESSION_ITEMS};
+    let expected_error = [
+        Err(Error::InvalidExpression),
+        Ok(GCode::Execute),
+        Ok(GCode::Word('g', num(3, 0))),
+        Ok(GCode::Execute),
+    ];
+    // Too many open brackets on the stack.
+    let nested = format!(
+        "G{}1{} G2\nG3\n",
+        "[".repeat(MAX_EXPRESSION_ITEMS + 1),
+        "]".repeat(MAX_EXPRESSION_ITEMS + 1)
+    );
+    assert_eq!(block_on(nested.bytes()), &expected_error);
+    // Too many items in the postfix expression: n literals and n - 1 operators.
+    let terms = vec!["1"; MAX_EXPRESSION_ITEMS / 2 + 1].join("+");
+    assert_eq!(
+        block_on(format!("G[{terms}] G2\nG3\n").bytes()),
+        &expected_error
+    );
+    // The longest one fits.
+    let terms = vec!["1"; MAX_EXPRESSION_ITEMS / 2].join("+");
+    let parsed = block_on(format!("G[{terms}]\n").bytes());
+    assert!(matches!(
+        parsed[..],
+        [Ok(GCode::Word('g', _)), Ok(GCode::Execute)]
+    ));
+}

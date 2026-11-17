@@ -17,9 +17,19 @@ use crate::{
         expressions::{Associativity, ExprItem, Expression, OpType, Operator},
         Literal, ParseResult, RealValue,
     },
-    utils::skip_whitespaces,
+    utils::{push_expression_item, skip_whitespaces},
     Error,
 };
+
+/// Pushes an item to the operator stack or to the postfix expression, both bounded by
+/// [`crate::MAX_EXPRESSION_ITEMS`]; returns the error when it does not fit.
+macro_rules! push {
+    ($vec:expr, $item:expr) => {
+        if let Err(e) = push_expression_item(&mut $vec, $item) {
+            return Some(ParseResult::Parsing(e));
+        }
+    };
+}
 
 #[derive(PartialEq, Debug, Clone)]
 enum Token {
@@ -217,7 +227,7 @@ where
     let mut expects = Expect::UnaryOrLiteralOrExpr;
     let mut stack: Vec<Stacked> = Vec::new();
     let mut postfix: Vec<ExprItem> = Vec::new();
-    let mut depth = 0;
+    let mut depth = 0u32;
 
     loop {
         try_result!(skip_whitespaces(input));
@@ -242,12 +252,13 @@ where
         // grammar analysis
         match token {
             Token::OpenBracket => {
-                depth += 1;
+                // Each bracket is stacked too: bounded by the memory, cannot overflow.
+                depth = depth.wrapping_add(1);
                 expects = Expect::UnaryOrLiteralOrExpr;
-                stack.push(Stacked::OpenBracket)
+                push!(stack, Stacked::OpenBracket)
             }
             Token::Literal(l) => {
-                postfix.push(l.into());
+                push!(postfix, l.into());
                 if depth != 0 {
                     expects = Expect::BinOpOrCloseBracket;
                 } else {
@@ -257,14 +268,17 @@ where
             Token::CloseBracket => {
                 loop {
                     match stack.pop() {
-                        Some(Stacked::Operator(op)) => postfix.push(op.into()),
+                        Some(Stacked::Operator(op)) => push!(postfix, op.into()),
                         Some(Stacked::OpenBracket) => break,
-                        Some(_) | None => unreachable!(),
+                        // Not expected: a close bracket is only accepted inside brackets.
+                        Some(Stacked::ATan) | None => {
+                            return Some(ParseResult::Parsing(Error::InvalidExpression))
+                        }
                     };
                 }
                 // println!("CloseBracket: {:?} {:?}", postfix, stack);
-                // TODO: use checked arithmetic to prevent panic if depth == 0
-                depth -= 1;
+                // An open bracket has just been popped, so depth is at least 1.
+                depth = depth.wrapping_sub(1);
 
                 if stack
                     .last()
@@ -282,7 +296,7 @@ where
             }
             Token::Operator(Operator::Divide) if expects == Expect::ATanDiv => {
                 stack.pop(); // this is known to be Stacked::ATan
-                stack.push(Stacked::Operator(Operator::ATan));
+                push!(stack, Stacked::Operator(Operator::ATan));
                 expects = Expect::Expr
             }
             Token::Operator(op) => {
@@ -293,40 +307,31 @@ where
                  *   pop and add into postfix expression
                  * done
                  */
-                while stack
-                    .last()
-                    .map(|tok| match tok {
-                        Stacked::Operator(stacked_op) => {
-                            op.precedence() < stacked_op.precedence()
-                                || (op.precedence() == stacked_op.precedence()
-                                    && op.associativity() == Associativity::Left)
-                        }
-                        Stacked::OpenBracket => false,
-                        _ => unreachable!(),
-                    })
-                    .unwrap_or(false)
-                {
-                    postfix.push(
-                        match stack.pop().unwrap() {
-                            Stacked::Operator(op) => op,
-                            _ => unreachable!(),
-                        }
-                        .into(),
-                    )
+                // An open bracket (or an ATan, not expected here) stops the popping too.
+                while let Some(&Stacked::Operator(stacked_op)) = stack.last() {
+                    if op.precedence() < stacked_op.precedence()
+                        || (op.precedence() == stacked_op.precedence()
+                            && op.associativity() == Associativity::Left)
+                    {
+                        stack.pop();
+                        push!(postfix, stacked_op.into());
+                    } else {
+                        break;
+                    }
                 }
 
                 match op {
                     #[cfg(feature = "parse-parameters")]
                     Operator::GetParameter => {
-                        stack.push(Stacked::Operator(Operator::GetParameter));
+                        push!(stack, Stacked::Operator(Operator::GetParameter));
                         expects = Expect::UnaryOrLiteralOrExpr;
                     }
                     Operator::ATan => {
-                        stack.push(Stacked::ATan);
+                        push!(stack, Stacked::ATan);
                         expects = Expect::Expr;
                     }
                     _ => {
-                        stack.push(Stacked::Operator(op));
+                        push!(stack, Stacked::Operator(op));
 
                         if op.op_type() == OpType::Unary {
                             expects = Expect::Expr
@@ -347,20 +352,20 @@ where
     */
     while let Some(stacked) = stack.pop() {
         match stacked {
-            Stacked::Operator(op) => postfix.push(op.into()),
-            Stacked::OpenBracket => return Some(ParseResult::Parsing(Error::InvalidExpression)),
-            _ => unreachable!(),
+            Stacked::Operator(op) => push!(postfix, op.into()),
+            // An ATan is not expected here: it always comes with its brackets.
+            Stacked::OpenBracket | Stacked::ATan => {
+                return Some(ParseResult::Parsing(Error::InvalidExpression))
+            }
         }
     }
 
-    debug_assert!(stack.is_empty());
-
     // println!("end: {:?} {:?}", postfix, stack);
     Some(ParseResult::Ok(if postfix.len() == 1 {
-        if let Some(Either::Right(rv)) = postfix.pop() {
-            rv.into()
-        } else {
-            unreachable!()
+        match postfix.pop() {
+            Some(Either::Right(literal)) => literal.into(),
+            // Not expected: an operator always comes with operands.
+            _ => return Some(ParseResult::Parsing(Error::InvalidExpression)),
         }
     } else {
         Expression(postfix).into()

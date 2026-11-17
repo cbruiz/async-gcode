@@ -19,6 +19,8 @@ use crate::{
 };
 #[cfg(all(feature = "parse-parameters", not(feature = "parse-expressions")))]
 use crate::utils::skip_whitespaces;
+#[cfg(feature = "string-value")]
+use crate::utils::TextBuffer;
 #[cfg(any(feature = "parse-parameters", feature = "parse-expressions"))]
 use crate::types::Literal;
 use crate::stream::{ByteStream, UnpinTrait};
@@ -57,12 +59,16 @@ where
     let mut n = 0u32;
     let mut order = 0u8;
     while b.is_ascii_digit() {
-        // At most 9 digits, so `n` stays below 10^9 and cannot overflow.
+        // At most 9 digits, so `n` stays below 10^9 and cannot overflow: the wrapping operations
+        // only spare the overflow checks.
         if order > 8 {
             return Some(Err(crate::Error::NumberOverflow.into()));
         }
-        n = n * 10 + u32::from(b - b'0');
-        order += 1;
+        // `b` is a digit, and `order` is at most 8 here.
+        n = n
+            .wrapping_mul(10)
+            .wrapping_add(u32::from(b.wrapping_sub(b'0')));
+        order = order.wrapping_add(1);
         b = match input.next().await? {
             Ok(b) => b,
             Err(e) => return Some(Err(e)),
@@ -137,12 +143,17 @@ where
         let int = int.unwrap_or(0);
         let (n, ord) = dec.unwrap_or((0u32, 0u8));
         // The scaled value must fit in the i32 mantissa of `DecimalRepr`.
-        let magnitude = int
-            .checked_mul(POW10[usize::from(ord)])
+        let magnitude = POW10
+            .get(usize::from(ord))
+            .and_then(|&pow| int.checked_mul(pow))
             .and_then(|v| v.checked_add(n))
             .and_then(|v| i32::try_from(v).ok());
         match magnitude {
-            Some(m) => ParseResult::Ok(DecimalRepr::new(if negativ { -m } else { m }, ord)),
+            // `m` is not negative, so its negation cannot overflow.
+            Some(m) => ParseResult::Ok(DecimalRepr::new(
+                if negativ { m.wrapping_neg() } else { m },
+                ord,
+            )),
             None => ParseResult::Parsing(Error::NumberOverflow),
         }
     };
@@ -154,27 +165,20 @@ async fn parse_string_literal<S, E>(input: &mut S) -> Option<ParseResult<String,
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
 {
-    #[cfg(not(feature = "std"))]
-    use alloc::vec::Vec;
-
     // we cannot use take_until(…).collect() because we need to distinguish input's end of stream
     // from take_until(…) end of stream
 
-    let mut array = Vec::new();
+    let mut text = TextBuffer::new();
     loop {
         match try_result!(input.next()) {
             b'"' => break,
             b'\\' => {
-                array.push(try_result!(input.next()));
+                text.push(try_result!(input.next()));
             }
-            b => array.push(b),
+            b => text.push(b),
         }
     }
-
-    match String::from_utf8(array) {
-        Ok(string) => Some(ParseResult::Ok(string)),
-        Err(_) => Some(Error::InvalidUTF8String.into()),
-    }
+    Some(ParseResult::from_parsing(text.into_string()))
 }
 
 #[cfg(any(feature = "parse-parameters", feature = "parse-expressions"))]
@@ -202,13 +206,9 @@ where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
     E: core::convert::From<Error>,
 {
-    #[cfg(not(feature = "std"))]
-    use alloc::vec::Vec;
-
-    let mut array = Vec::new();
     // Bytes beyond the limit are consumed (so that the line still ends where expected) but not
     // stored, to keep an arbitrarily long line from exhausting a small heap.
-    let mut too_long = false;
+    let mut text = TextBuffer::new();
     loop {
         match input.next().await {
             #[cfg(feature = "parse-trailing-comment")]
@@ -220,13 +220,7 @@ where
                 input.push_back(b);
                 break;
             }
-            Some(Ok(b)) => {
-                if array.len() < crate::MAX_TEXT_LENGTH {
-                    array.push(b)
-                } else {
-                    too_long = true;
-                }
-            }
+            Some(Ok(b)) => text.push(b),
             Some(Err(e)) => {
                 return Some(Err(e).into())
             }
@@ -235,13 +229,7 @@ where
             }
         }
     }
-    if too_long {
-        return Some(Error::TextTooLong.into());
-    }
-    match String::from_utf8(array) {
-        Ok(string) => Some(ParseResult::Ok(string)),
-        Err(_) => Some(Error::InvalidUTF8String.into()),
-    }
+    Some(ParseResult::from_parsing(text.into_string()))
 }
 
 /// Skips spaces and parses a real value (the value of a word, a line number or a parameter).
@@ -265,7 +253,8 @@ where
             #[cfg(not(feature = "std"))]
             use alloc::vec::Vec;
 
-            let mut n = 1;
+            // The number of `#`, i.e. of `GetParameter` operators.
+            let mut n = 1usize;
             let literal = loop {
                 try_result!(skip_whitespaces(input));
                 let b = try_result!(input.next());
@@ -274,12 +263,22 @@ where
 
                     break try_parse!(parse_literal(input));
                 }
-                n += 1;
+                // The expression holds the literal and the `n` operators.
+                if n >= crate::MAX_EXPRESSION_ITEMS.saturating_sub(1) {
+                    return Some(Error::InvalidExpression.into());
+                }
+                // Bounded by MAX_EXPRESSION_ITEMS: cannot overflow.
+                n = n.wrapping_add(1);
             };
 
-            let vec: Vec<_> = core::iter::once(literal.into())
-                .chain(core::iter::repeat_n(Operator::GetParameter.into(), n))
-                .collect();
+            // A single fallible allocation for the literal and the `n` operators (`n + 1` cannot
+            // overflow: it is at most MAX_EXPRESSION_ITEMS).
+            let mut vec = Vec::new();
+            if vec.try_reserve_exact(n.wrapping_add(1)).is_err() {
+                return Some(Error::OutOfMemory.into());
+            }
+            vec.push(literal.into());
+            vec.extend(core::iter::repeat_n(Operator::GetParameter.into(), n));
             ParseResult::Ok(Expression(vec).into())
         }
         #[cfg(feature = "optional-value")]

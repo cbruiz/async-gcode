@@ -187,6 +187,13 @@ fn line_number() {
         block_on(input),
         &[Ok(GCode::LineNumber(Some(23))), Ok(GCode::Execute)]
     );
+
+    // Negative numbers wrap around: `N-1` is the line before N0
+    let input = "N-1\n".bytes();
+    assert_eq!(
+        block_on(input),
+        &[Ok(GCode::LineNumber(Some(u32::MAX))), Ok(GCode::Execute)]
+    );
 }
 
 #[test]
@@ -459,4 +466,189 @@ fn into_inner_returns_the_rest_of_the_input() {
         collect(&mut stream),
         "G2\n".bytes().map(Result::<_, Error>::Ok).collect::<Vec<_>>()
     );
+}
+
+/// Reads the input as raw lines: (content, truncated) per line, and the number of lines
+fn raw_lines(input: &str, buf_len: usize) -> (Vec<(String, bool)>, u32) {
+    let mut parser = Parser::new(stream_of(input.bytes().map(Result::<_, Error>::Ok)));
+    futures_executor::block_on(async {
+        let mut lines = Vec::new();
+        let mut buf = vec![0u8; buf_len];
+        while let Some(item) = parser.next_raw_line(&mut buf).await {
+            let (len, truncated) = item.unwrap();
+            lines.push((String::from_utf8(buf[..len].to_vec()).unwrap(), truncated));
+        }
+        (lines, parser.get_current_line())
+    })
+}
+
+#[test]
+fn raw_lines_keep_the_content_and_end_with_lf_cr_or_crlf() {
+    for input in ["N1 G1 X1*3 ; c\n\nM29\n", "N1 G1 X1*3 ; c\r\n\r\nM29\r\n", "N1 G1 X1*3 ; c\r\rM29\r"] {
+        assert_eq!(
+            raw_lines(input, 32),
+            (
+                vec![
+                    ("N1 G1 X1*3 ; c".to_string(), false),
+                    (String::new(), false),
+                    ("M29".to_string(), false)
+                ],
+                3
+            ),
+            "input: {:?}",
+            input
+        );
+    }
+}
+
+#[test]
+fn raw_lines_longer_than_the_buffer_are_truncated_and_consumed() {
+    assert_eq!(
+        raw_lines("G1 X100 Y200\nG2\n", 5),
+        (vec![("G1 X1".to_string(), true), ("G2".to_string(), false)], 2)
+    );
+}
+
+#[test]
+fn raw_lines_and_parsed_lines_can_alternate() {
+    // A raw line after a CRLF line skips its LF, and the parser goes on after a raw line
+    let mut parser = Parser::new(stream_of("G1\r\nRAW LINE\r\nG2\n".bytes().map(Result::<_, Error>::Ok)));
+    futures_executor::block_on(async {
+        assert_eq!(parser.next().await, Some(Ok(GCode::Word('g', num(1, 0)))));
+        assert_eq!(parser.next().await, Some(Ok(GCode::Execute)));
+        let mut buf = [0u8; 16];
+        assert_eq!(parser.next_raw_line(&mut buf).await, Some(Ok((8, false))));
+        assert_eq!(&buf[..8], b"RAW LINE");
+        assert_eq!(parser.next().await, Some(Ok(GCode::Word('g', num(2, 0)))));
+        assert_eq!(parser.next().await, Some(Ok(GCode::Execute)));
+        assert_eq!(parser.next().await, None);
+        assert_eq!(parser.get_current_line(), 3);
+    });
+}
+
+#[cfg(feature = "parse-checksum")]
+#[test]
+fn a_raw_line_does_not_alter_the_checksum_of_the_next_one() {
+    // N2 G1*<valid> after a raw line: the sum starts again at the line start
+    let line = "N2 G1";
+    let cs = line.bytes().fold(0u8, |a, b| a ^ b);
+    let input = std::format!("RAW*99\n{}*{}\n", line, cs);
+    let mut parser = Parser::new(stream_of(input.bytes().map(Result::<_, Error>::Ok)));
+    futures_executor::block_on(async {
+        let mut buf = [0u8; 16];
+        assert_eq!(parser.next_raw_line(&mut buf).await, Some(Ok((6, false))));
+        let mut items = Vec::new();
+        while let Some(item) = parser.next().await {
+            items.push(item);
+        }
+        assert!(items.iter().all(|i| i.is_ok()), "{:?}", items);
+    });
+}
+
+#[test]
+fn a_raw_line_with_a_stream_error_reports_it() {
+    let input = [Ok(b'G'), Err(Error::UnexpectedByte(0)), Ok(b'\n')];
+    let mut parser = Parser::new(stream_of(input.into_iter()));
+    futures_executor::block_on(async {
+        let mut buf = [0u8; 8];
+        assert_eq!(parser.next_raw_line(&mut buf).await, Some(Err(Error::UnexpectedByte(0))));
+    });
+}
+
+#[test]
+#[cfg(feature = "string-value")]
+fn string_values_longer_than_the_max_are_consumed_and_rejected() {
+    let max = "a".repeat(crate::MAX_TEXT_LENGTH);
+    assert_eq!(
+        block_on(format!("G\"{max}\"\n").bytes()),
+        &[Ok(GCode::Word('g', max.clone().into())), Ok(GCode::Execute)]
+    );
+    // The string is read up to its closing quote (even an escaped one) before the error.
+    assert_eq!(
+        block_on(format!("G\"{max}a\\\" G1\" G2\nG3\n").bytes()),
+        &[
+            Err(Error::TextTooLong),
+            Ok(GCode::Execute),
+            Ok(GCode::Word('g', num(3, 0))),
+            Ok(GCode::Execute),
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "string-value")]
+fn texts_longer_than_the_max_are_consumed_and_rejected() {
+    let max = "a".repeat(crate::MAX_TEXT_LENGTH);
+    assert_eq!(
+        parse_with_text(&format!("M117 {max}\n")),
+        &[
+            Ok(GCode::Word('m', num(117, 0))),
+            text(&max),
+            Ok(GCode::Execute)
+        ]
+    );
+    assert_eq!(
+        parse_with_text(&format!("M117 {max}a\nG1\n")),
+        &[
+            Ok(GCode::Word('m', num(117, 0))),
+            Err(Error::TextTooLong),
+            Ok(GCode::Execute),
+            Ok(GCode::Word('g', num(1, 0))),
+            Ok(GCode::Execute),
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "parse-comments")]
+fn comments_longer_than_the_max_are_consumed_and_rejected() {
+    let max = "a".repeat(crate::MAX_TEXT_LENGTH);
+    assert_eq!(
+        block_on(format!("({max})\n").bytes()),
+        &[Ok(GCode::Comment(max.clone())), Ok(GCode::Execute)]
+    );
+    assert_eq!(
+        block_on(format!("({max}a)G1\nG2\n").bytes()),
+        &[
+            Err(Error::TextTooLong),
+            Ok(GCode::Execute),
+            Ok(GCode::Word('g', num(2, 0))),
+            Ok(GCode::Execute),
+        ]
+    );
+}
+
+#[test]
+#[cfg(all(feature = "parse-comments", feature = "parse-trailing-comment"))]
+fn trailing_comments_longer_than_the_max_are_consumed_and_rejected() {
+    let max = "a".repeat(crate::MAX_TEXT_LENGTH);
+    assert_eq!(
+        block_on(format!("G1;{max}a\nG2\n").bytes()),
+        &[
+            Ok(GCode::Word('g', num(1, 0))),
+            Err(Error::TextTooLong),
+            Ok(GCode::Execute),
+            Ok(GCode::Word('g', num(2, 0))),
+            Ok(GCode::Execute),
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "future-stream")]
+fn the_input_is_not_polled_after_its_end() {
+    // `Unfold` panics when it is polled after its end, as any stream may.
+    let mut bytes = "G1\n".bytes();
+    let input = Box::pin(futures::stream::unfold((), move |()| {
+        let next = bytes.next().map(|b| (Ok::<_, Error>(b), ()));
+        async move { next }
+    }));
+    let mut parser = Parser::new(input);
+    futures_executor::block_on(async {
+        assert_eq!(parser.next().await, Some(Ok(GCode::Word('g', num(1, 0)))));
+        assert_eq!(parser.next().await, Some(Ok(GCode::Execute)));
+        for _ in 0..3 {
+            assert_eq!(parser.next().await, None);
+        }
+    });
 }

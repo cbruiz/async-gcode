@@ -27,6 +27,18 @@ impl<O, E> From<crate::Error> for ParseResult<O, E> {
     }
 }
 
+impl<O, E> ParseResult<O, E> {
+    /// The result of a parsing step: its error is a parsing one, not an input one.
+    #[cfg(any(feature = "parse-comments", feature = "string-value"))]
+    #[inline]
+    pub(crate) fn from_parsing(res: Result<O, crate::Error>) -> Self {
+        match res {
+            Ok(o) => ParseResult::Ok(o),
+            Err(e) => ParseResult::Parsing(e),
+        }
+    }
+}
+
 #[cfg(not(feature = "parse-comments"))]
 pub type Comment = ();
 #[cfg(feature = "parse-comments")]
@@ -41,14 +53,17 @@ pub struct DecimalRepr {
 impl PartialEq for DecimalRepr {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        if self.scale == other.scale {
-            self.integer == other.integer
-        }
-        else if self.scale > other.scale {
-            self.integer == (other.integer * 10i32.pow((self.scale - other.scale) as u32))
-        }
-        else {
-            other.integer == (self.integer * 10i32.pow((other.scale - self.scale) as u32))
+        // Brings the value with the lowest scale to the scale of the other one. When that
+        // overflows, the scaled value is out of the i32 range and cannot equal the other one.
+        let (low, high) = if self.scale <= other.scale {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        match 10i32.checked_pow(u32::from(high.scale.abs_diff(low.scale))) {
+            Some(pow) => low.integer.checked_mul(pow) == Some(high.integer),
+            // Only zero stays in the i32 range once scaled.
+            None => low.integer == 0 && high.integer == 0,
         }
     }
 }
@@ -72,8 +87,12 @@ impl DecimalRepr {
         }
     }
     #[cfg(feature = "float-f64")]
-    pub fn to_f64(&self ) -> f64 {
-        self.integer as f64 / (10u64.pow(self.scale as u32) as f64)
+    pub fn to_f64(&self) -> f64 {
+        match 10u64.checked_pow(u32::from(self.scale)) {
+            Some(pow) => self.integer as f64 / pow as f64,
+            // A scale over 19: |value| < 2^31 / 10^20, i.e. 0 at the precision of a gcode.
+            None => 0.0,
+        }
     }
 
     #[inline]
@@ -334,11 +353,13 @@ pub(crate) mod expressions {
         ///
         /// When `parse-parameters` is enabled, this method takes a closure as an argument.
         /// This closure is used to resolve parameters get.
+        ///
+        /// Not implemented yet: always returns [`Error::InvalidExpression`].
         pub fn evaluate(
             &self,
             #[cfg(feature = "parse-parameters")] _cbk: &mut dyn FnMut(Literal) -> Literal,
         ) -> Result<Literal, Error> {
-            todo!()
+            Err(Error::InvalidExpression)
         }
     }
 
@@ -374,5 +395,32 @@ pub(crate) mod expressions {
     mod test {
         // test plan for expressions:
         // TBD
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::DecimalRepr;
+
+    #[test]
+    fn decimal_repr_eq_compares_across_scales() {
+        assert_eq!(DecimalRepr::new(3, 0), DecimalRepr::new(300, 2));
+        assert_eq!(DecimalRepr::new(-300, 2), DecimalRepr::new(-3, 0));
+        assert_ne!(DecimalRepr::new(3, 0), DecimalRepr::new(301, 2));
+    }
+
+    #[test]
+    fn decimal_repr_eq_does_not_overflow() {
+        // 300 * 10^8 and 10^12 are out of the i32 range.
+        assert_ne!(DecimalRepr::new(300, 0), DecimalRepr::new(1, 8));
+        assert_ne!(DecimalRepr::new(1, 12), DecimalRepr::new(1, 0));
+        assert_eq!(DecimalRepr::new(0, 0), DecimalRepr::new(0, 12));
+    }
+
+    #[cfg(feature = "float-f64")]
+    #[test]
+    fn decimal_repr_to_f64_does_not_overflow() {
+        assert_eq!(DecimalRepr::new(-15, 1).to_f64(), -1.5);
+        assert_eq!(DecimalRepr::new(1, 25).to_f64(), 0.0);
     }
 }

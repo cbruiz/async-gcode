@@ -72,6 +72,29 @@ pub(crate) trait MyTryStreamExt: TryByteStream {
 }
 impl<T: ?Sized> MyTryStreamExt for T where T: TryByteStream {}
 
+/// Polls `stream` unless it has already ended. Polling a [`futures::Stream`] after its end may
+/// panic, so the input is not polled again once it returned `None`: the parser keeps on returning
+/// `None` instead.
+///
+/// Not needed by this crate's `ByteStream` trait, whose `next` may be called again after `None`
+/// (e.g. after a read error of a serial port).
+#[cfg(feature = "future-stream")]
+#[inline]
+fn poll_until_done<S: TryByteStream>(
+    stream: core::pin::Pin<&mut S>,
+    done: &mut bool,
+    ctx: &mut core::task::Context<'_>,
+) -> core::task::Poll<Option<Result<S::Ok, S::Error>>> {
+    if *done {
+        return core::task::Poll::Ready(None);
+    }
+    let poll = stream.try_poll_next(ctx);
+    if let core::task::Poll::Ready(None) = poll {
+        *done = true;
+    }
+    poll
+}
+
 pub(crate) trait PushBackable {
     type Item;
     fn push_back(&mut self, v: Self::Item) -> Option<Self::Item>;
@@ -82,6 +105,8 @@ pub(crate) mod pushback {
 
     use super::{ByteStream, TryByteStream};
     use super::PushBackable;
+    #[cfg(feature = "future-stream")]
+    use super::poll_until_done;
     #[cfg(feature = "future-stream")]
     use core::pin::Pin;
     #[cfg(feature = "future-stream")]
@@ -95,6 +120,8 @@ pub(crate) mod pushback {
             #[pin]
             stream: S,
             val: Option<S::Ok>,
+            // The stream has ended: it is not polled anymore.
+            done: bool,
         }
     }
 
@@ -107,7 +134,12 @@ pub(crate) mod pushback {
 
     impl<S: TryByteStream> PushBack<S> {
         pub fn new(stream: S) -> Self {
-            Self { stream, val: None }
+            Self {
+                stream,
+                val: None,
+                #[cfg(feature = "future-stream")]
+                done: false,
+            }
         }
 
         /// The wrapped stream. A pushed-back item, if any, is dropped.
@@ -134,10 +166,9 @@ pub(crate) mod pushback {
         fn poll_next(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             let this = self.project();
             if let Some(v) = this.val.take() {
-                Poll::Ready(Some(Ok(v)))
-            } else {
-                this.stream.try_poll_next(ctx)
+                return Poll::Ready(Some(Ok(v)));
             }
+            poll_until_done(this.stream, this.done, ctx)
         }
     }
 
@@ -198,6 +229,8 @@ pub(crate) mod xorsum_pushback {
     use super::{ByteStream, TryByteStream};
 
     #[cfg(feature = "future-stream")]
+    use super::poll_until_done;
+    #[cfg(feature = "future-stream")]
     use core::pin::Pin;
     #[cfg(feature = "future-stream")]
     use core::task::{Context, Poll};
@@ -208,7 +241,9 @@ pub(crate) mod xorsum_pushback {
             #[pin]
             stream: S,
             head: Option<S::Ok>,
-            sum: S::Ok
+            sum: S::Ok,
+            // The stream has ended: it is not polled anymore.
+            done: bool,
         }
     }
 
@@ -230,6 +265,8 @@ pub(crate) mod xorsum_pushback {
                 stream,
                 head: None,
                 sum: initial_sum,
+                #[cfg(feature = "future-stream")]
+                done: false,
             }
         }
 
@@ -272,7 +309,7 @@ pub(crate) mod xorsum_pushback {
             let item = if let Some(item) = this.head.take() {
                 item
             } else {
-                match this.stream.try_poll_next(ctx) {
+                match poll_until_done(this.stream, this.done, ctx) {
                     Poll::Ready(Some(Ok(item))) => item,
                     other => return other,
                 }

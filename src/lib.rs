@@ -86,13 +86,33 @@
 //! the floating point arithmetics especially for small target. After investigation, it does not
 //! seem to be a significant gain for the precision required by the gcode standard.
 //!
-//! Ideally all arithmetics triggered by a theoritically valid input should be caught and not
-//! trigger a panic. For an excessive  number of digit in a number may exceed the capacity of the
-//! variable used internally.
+//! ## No panic
+//!
+//! The parser runs in the async tasks of firmwares, where a panic halts the machine: no input
+//! makes it panic. A number too large for the internal representation is an
+//! [`Error::NumberOverflow`]. The values that need the heap (strings, comments, expressions) are
+//! bounded (`MAX_TEXT_LENGTH`, `MAX_EXPRESSION_ITEMS`) and their allocations are fallible: a
+//! full heap is an `Error::OutOfMemory` instead of a panic of the allocation error handler.
+//! Clippy enforces the absence of arithmetic overflow, indexing, `unwrap` and `panic!` in the
+//! crate.
 //!
 //! [RS274/NGC interpreter version 3]: https://www.nist.gov/publications/nist-rs274ngc-interpreter-version-3?pub_id=823374
 // The tests use the standard library whatever the features.
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
+// See "No panic" above. The tests are free to panic.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 
 #[cfg(all(
     not(feature = "std"),
@@ -149,22 +169,38 @@ pub enum Error {
     /// The string or comment received contained an invalid UTF-8 character sequence.
     InvalidUTF8String,
 
-    #[cfg(feature = "string-value")]
-    /// The string received is longer than [MAX_TEXT_LENGTH] bytes.
+    #[cfg(any(feature = "parse-comments", feature = "string-value"))]
+    /// The string or comment received is longer than [MAX_TEXT_LENGTH] bytes.
     TextTooLong,
 
     #[cfg(feature = "parse-checksum")]
     /// Checksum verification failed. The error contains the computed value.
     BadChecksum(u8),
 
-    #[cfg(feature = "parse-expressions")]
-    /// The expressions received was invalid.
+    #[cfg(any(feature = "parse-expressions", feature = "parse-parameters"))]
+    /// The expressions received was invalid, longer than [MAX_EXPRESSION_ITEMS], or could not be
+    /// evaluated (`Expression::evaluate` is not implemented yet).
     InvalidExpression,
+
+    #[cfg(any(
+        feature = "parse-comments",
+        feature = "string-value",
+        feature = "parse-parameters",
+        feature = "parse-expressions"
+    ))]
+    /// The heap could not hold the string, comment or expression received.
+    OutOfMemory,
 }
 
-/// Max length (in bytes) of a string value. Longer ones are rejected with [Error::TextTooLong].
-#[cfg(feature = "string-value")]
+/// Max length (in bytes) of a string value, a text or a comment. Longer ones are consumed up to
+/// their end, then rejected with [Error::TextTooLong].
+#[cfg(any(feature = "parse-comments", feature = "string-value"))]
 pub const MAX_TEXT_LENGTH: usize = 128;
+
+/// Max number of items (literals, operators and open brackets) of an expression or a parameter
+/// chain (`##1`). Longer ones are rejected with [Error::InvalidExpression].
+#[cfg(any(feature = "parse-expressions", feature = "parse-parameters"))]
+pub const MAX_EXPRESSION_ITEMS: usize = 64;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum GCode {

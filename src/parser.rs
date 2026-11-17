@@ -12,10 +12,8 @@
 //! real_number ::= ( '+' | '-' )? ( [0-9]+ ( '.' [0-9]* )? | '.' [0-9]+ )
 //! ```
 //!
-#[cfg(all(not(feature = "std"), feature = "parse-comments"))]
-use alloc::string::String;
-#[cfg(all(not(feature = "std"), feature = "parse-comments"))]
-use alloc::vec::Vec;
+#[cfg(feature = "parse-comments")]
+use crate::utils::TextBuffer;
 
 mod values;
 
@@ -96,18 +94,15 @@ async fn parse_eol_comment<S, E>(input: &mut S) -> Option<ParseResult<Comment, E
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
 {
-    let mut v = Vec::new();
+    let mut text = TextBuffer::new();
     loop {
         let b = try_result!(input.next());
         match b {
             b'\r' | b'\n' => {
                 input.push_back(b);
-                break Some(match String::from_utf8(v) {
-                    Ok(s) => ParseResult::Ok(s),
-                    Err(_) => Error::InvalidUTF8String.into(),
-                });
+                break Some(ParseResult::from_parsing(text.into_string()));
             }
-            b => v.push(b),
+            b => text.push(b),
         }
     }
 }
@@ -134,21 +129,16 @@ async fn parse_inline_comment<S, E>(input: &mut S) -> Option<ParseResult<Comment
 where
     S: ByteStream<Item = Result<u8, E>> + PushBackable<Item = u8> + UnpinTrait,
 {
-    let mut v = Vec::new();
+    let mut text = TextBuffer::new();
     loop {
         let b = try_result!(input.next());
         match b {
             b'\\' => {
-                v.push(try_result!(input.next()));
+                text.push(try_result!(input.next()));
             }
             b'(' => break Some(Error::UnexpectedByte(b'(').into()),
-            b')' => {
-                break Some(match String::from_utf8(v) {
-                    Ok(s) => ParseResult::Ok(s),
-                    Err(_) => Error::InvalidUTF8String.into(),
-                })
-            }
-            b => v.push(b),
+            b')' => break Some(ParseResult::from_parsing(text.into_string())),
+            b => text.push(b),
         }
     }
 }
@@ -245,7 +235,8 @@ where
         #[cfg(feature = "parse-checksum")]
         self.input.reset_sum(0);
         self.after_cr = eol == b'\r';
-        self.line_count += 1;
+        // Wraps around like the line numbers (`N-1` is u32::MAX), with no overflow check.
+        self.line_count = self.line_count.wrapping_add(1);
         GCode::Execute
     }
 
@@ -263,6 +254,47 @@ where
                 b => break Error::UnexpectedByte(b).into(),
             }
         })
+    }
+
+    /// Reads the next line as raw bytes into `buf`, without parsing it (e.g. a line to be stored
+    /// in a file instead of executed). The end of line (`\n`, `\r` or `\r\n`) is not stored.
+    /// Returns the length stored and whether the line was longer than `buf` (the rest of the line
+    /// is consumed and dropped). The line counts as any other one.
+    pub async fn next_raw_line(&mut self, buf: &mut [u8]) -> Option<Result<(usize, bool), E>> {
+        let mut handed_over: Option<u8> = None;
+        if self.after_cr {
+            let next = self.input.next().await?;
+            self.after_cr = false;
+            match next {
+                Ok(b'\n') => {}
+                Ok(b) => handed_over = Some(b),
+                Err(err) => return Some(Err(err)),
+            }
+        }
+        let (mut len, mut truncated) = (0usize, false);
+        loop {
+            let b = match handed_over.take() {
+                Some(b) => b,
+                None => match self.input.next().await? {
+                    Ok(b) => b,
+                    Err(err) => return Some(Err(err)),
+                },
+            };
+            match b {
+                b'\r' | b'\n' => {
+                    self.end_line(b);
+                    return Some(Ok((len, truncated)));
+                }
+                b => match buf.get_mut(len) {
+                    Some(slot) => {
+                        *slot = b;
+                        // Below `buf.len()`: cannot overflow.
+                        len = len.wrapping_add(1);
+                    }
+                    None => truncated = true,
+                },
+            }
+        }
     }
 
     pub async fn next(&mut self) -> Option<Result<GCode, E>> {
@@ -322,7 +354,9 @@ where
                                     break Err(Error::UnexpectedByte(b'.').into());
                                 }
                                 else {
-                                    let lnum = _rn.integer_part().try_into().ok();
+                                    // Negative numbers wrap around (`N-1` is u32::MAX): hosts
+                                    // send `N-1 M110` so that the next line expected is N0
+                                    let lnum = Some(_rn.integer_part() as u32);
                                     break Ok(GCode::LineNumber(lnum));
                                 }
                             }

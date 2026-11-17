@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   conversions.
 - `either` is only a dependency with `parse-parameters` or `parse-expressions`, and the `cli` example
   requires `std` and `future-stream`.
+- No input makes the parser panic (clippy denies overflowing arithmetic, indexing, `unwrap` and
+  `panic!` in the crate), at no cost: same RAM, same code for the numbers, and about the same code
+  size with `opt-level = "z"`.
+  - String values (`string-value`) and comments (`parse-comments`) are bounded by
+    `MAX_TEXT_LENGTH`, like the text mode: longer ones are read up to their end, then reported as
+    `Error::TextTooLong`. An unterminated string used to grow without limit.
+  - Expressions and parameter chains (`##1`) are bounded by `MAX_EXPRESSION_ITEMS`: longer ones are
+    an `Error::InvalidExpression`. Nested brackets used to grow without limit.
+  - The allocations of strings, comments and expressions are fallible: a full heap is an
+    `Error::OutOfMemory` instead of a panic of the allocation error handler.
+  - With `future-stream`, the input is not polled again once it has ended (polling a finished
+    `Stream` may panic): the parser keeps on returning `None`.
 
 ## [0.2.0] – 2020-08-16
 ### Added

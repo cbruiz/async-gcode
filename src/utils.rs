@@ -3,6 +3,97 @@ use crate::stream::{ByteStream, PushBackable, UnpinTrait};
 #[cfg(feature = "future-stream")]
 use futures::StreamExt;
 
+#[cfg(all(
+    not(feature = "std"),
+    any(feature = "parse-comments", feature = "string-value")
+))]
+use alloc::string::String;
+#[cfg(all(
+    not(feature = "std"),
+    any(
+        feature = "parse-comments",
+        feature = "string-value",
+        feature = "parse-expressions"
+    )
+))]
+use alloc::vec::Vec;
+
+/// Pushes an item of an expression to `vec`, which holds at most [`crate::MAX_EXPRESSION_ITEMS`].
+///
+/// A full heap is an error instead of a panic (or an abort) of the allocation error handler. The
+/// fast path (room left in the allocation) costs the same as a plain `push`: its `len == capacity`
+/// test is the one `push` does anyway.
+#[cfg(feature = "parse-expressions")]
+pub(crate) fn push_expression_item<T>(vec: &mut Vec<T>, item: T) -> Result<(), crate::Error> {
+    let len = vec.len();
+    if len >= crate::MAX_EXPRESSION_ITEMS {
+        return Err(crate::Error::InvalidExpression);
+    }
+    if len == vec.capacity() && vec.try_reserve(1).is_err() {
+        return Err(crate::Error::OutOfMemory);
+    }
+    vec.push(item);
+    Ok(())
+}
+
+/// The bytes of a string, a text or a comment, read up to their end whatever their length.
+///
+/// At most [`crate::MAX_TEXT_LENGTH`] bytes are stored, so that an arbitrarily long (or
+/// unterminated) one cannot exhaust a small heap. Once it is too long, or the heap is full, the
+/// following bytes are dropped and [`TextBuffer::into_string`] reports the error: the caller keeps
+/// on reading up to the end, so that the parser stays in sync with the input.
+///
+/// Zero-cost compared to the plain `Vec` it replaces: no more RAM in the async state (the flag
+/// fits in its padding), the same allocations, and about the same code (`opt-level = "z"`). The
+/// inlining attributes are measured choices for that: keep them.
+#[cfg(any(feature = "parse-comments", feature = "string-value"))]
+pub(crate) struct TextBuffer {
+    bytes: Vec<u8>,
+    /// A byte was dropped: the text is too long when it reached the limit, otherwise the heap
+    /// was full (the failure to grow happens below the limit only).
+    failed: bool,
+}
+
+#[cfg(any(feature = "parse-comments", feature = "string-value"))]
+impl TextBuffer {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            failed: false,
+        }
+    }
+
+    /// Out of line: a single copy of the (fallible) growth, whatever the number of callers.
+    #[inline(never)]
+    pub(crate) fn push(&mut self, b: u8) {
+        // `try_reserve` only allocates when the capacity is reached: then `push` does not.
+        if self.failed
+            || self.bytes.len() >= crate::MAX_TEXT_LENGTH
+            || self.bytes.try_reserve(1).is_err()
+        {
+            self.failed = true;
+        } else {
+            self.bytes.push(b);
+        }
+    }
+
+    /// The string, without any new allocation. Inlined: the buffer is then dropped by the drop
+    /// code the async state has anyway.
+    #[inline]
+    pub(crate) fn into_string(self) -> Result<String, crate::Error> {
+        if self.failed {
+            Err(if self.bytes.len() >= crate::MAX_TEXT_LENGTH {
+                crate::Error::TextTooLong
+            } else {
+                crate::Error::OutOfMemory
+            })
+        } else {
+            String::from_utf8(self.bytes).map_err(|_| crate::Error::InvalidUTF8String)
+        }
+    }
+}
+
 #[doc(hidden)]
 #[macro_export]
 macro_rules! try_parse {
