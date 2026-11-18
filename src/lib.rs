@@ -174,8 +174,8 @@ pub enum Error {
     TextTooLong,
 
     #[cfg(feature = "parse-checksum")]
-    /// Checksum verification failed. The error contains the computed value.
-    BadChecksum(u8),
+    /// Checksum verification failed: the checksum computed from the line and the one received.
+    BadChecksum { computed: u8, received: u8 },
 
     #[cfg(any(feature = "parse-expressions", feature = "parse-parameters"))]
     /// The expressions received was invalid, longer than [MAX_EXPRESSION_ITEMS], or could not be

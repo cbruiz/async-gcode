@@ -15,7 +15,10 @@ fn parse_checksum_from_start_to_checksum() {
         block_on(input),
         &[
             Ok(GCode::Word('g', num(0, 0))),
-            Err(Error::BadChecksum(119)),
+            Err(Error::BadChecksum {
+                computed: 119,
+                received: 118
+            }),
             Ok(GCode::Execute)
         ]
     );

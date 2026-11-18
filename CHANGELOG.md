@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - `Parser::into_inner`, which returns the input stream (e.g. to close a file once it is parsed).
 
 ### Changed
+- `Error::BadChecksum` reports the checksum received besides the computed one:
+  `BadChecksum { computed, received }` (it was `BadChecksum(computed)`).
 - Minor fix to the documentation.
 - Faster parsing of numbers and words: the first byte of a value is passed on instead of being
   pushed back and read again at every nesting level (about 2x on a slicer G-code file).

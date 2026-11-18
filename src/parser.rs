@@ -435,7 +435,11 @@ where
                         if n >= 256 {
                             break Err(Error::NumberOverflow.into());
                         } else if (n as u8) != sum {
-                            break Err(Error::BadChecksum(sum).into());
+                            break Err(Error::BadChecksum {
+                                computed: sum,
+                                received: n as u8,
+                            }
+                            .into());
                         } else {
                             try_await_result!(skip_whitespaces(&mut self.input));
                             #[cfg(not(feature = "parse-trailing-comment"))]
