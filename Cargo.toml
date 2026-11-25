@@ -1,13 +1,21 @@
 [package]
-name = "async-gcode"
-version = "0.3.0"
-authors = ["Wilfried Chauveau <wilfried.chauveau@ithinuel.me>"]
-description = "An async gcode parser for no_std targets."
+# Fork of `async-gcode` (https://github.com/ithinuel/async-gcode) maintained for Printhor. It is
+# published under its own name, as `async-gcode` on crates.io belongs to the upstream project. The
+# library keeps its `async_gcode` name: depend on it as
+# `async-gcode = { package = "printhor-async-gcode", version = "0.4.0" }`
+name = "printhor-async-gcode"
+version = "0.4.0"
+authors = ["Wilfried Chauveau <wilfried.chauveau@ithinuel.me>", "Carlos Barrales Ruiz <cbruiz@gmail.com>"]
+description = "An async gcode parser for no_std targets (Printhor fork of async-gcode)."
 keywords = ["async", "await", "gcode"]
 license = "MIT"
-edition = "2021"
-repository = "https://github.com/ithinuel/async-gcode"
+edition = "2024"
+repository = "https://github.com/cbruiz/async-gcode"
+documentation = "https://docs.rs/printhor-async-gcode"
 categories = ["asynchronous", "embedded", "no-std", "parsing"]
+
+[lib]
+name = "async_gcode"
 
 [features]
 default = ["std", "future-stream"]

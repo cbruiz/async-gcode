@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - `Parser::into_inner`, which returns the input stream (e.g. to close a file once it is parsed).
 
 ### Changed
+- Published on crates.io as `printhor-async-gcode` 0.4.0 (`async-gcode` belongs to the upstream
+  project). The library is still `async_gcode`: depend on it as
+  `async-gcode = { package = "printhor-async-gcode", version = "0.4.0" }`.
 - `Error::BadChecksum` reports the checksum received besides the computed one:
   `BadChecksum { computed, received }` (it was `BadChecksum(computed)`).
 - Minor fix to the documentation.
